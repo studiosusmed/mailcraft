@@ -12,6 +12,9 @@ mod address;
 pub mod auth_results;
 pub mod auto_replies;
 pub mod ber;
+pub mod bookmark;
+#[cfg(test)]
+mod bookmark_tests;
 mod calendar;
 pub mod confusables;
 mod contact;
@@ -27,6 +30,7 @@ mod message;
 pub mod messages;
 #[cfg(test)]
 mod messages_tests;
+mod note;
 mod offline;
 pub mod pictures;
 pub mod pop;
@@ -36,6 +40,9 @@ pub mod public_keys;
 pub mod remote;
 pub mod remote_rules;
 pub mod remote_tasks;
+pub mod report;
+#[cfg(test)]
+mod report_tests;
 pub mod rich;
 mod rule;
 pub mod search;
@@ -52,6 +59,7 @@ pub mod zoned;
 use serde::{Deserialize, Serialize};
 
 pub use address::{Address, MAX_ADDRESS, format_list, format_list_capped, mailbox_address};
+pub use bookmark::{Bookmark, MAX_BOOKMARK_NAME, MAX_BOOKMARK_OFFSET, MAX_BOOKMARK_QUOTE, MAX_BOOKMARKS};
 pub use calendar::{
     Attendee, Calendar, CalendarOwner, Event, Freq, ListedTwice, MAX_JOIN_LINK, MAX_OPENED_CALENDARS, Occurrence, OnlineMeeting, OnlineProvider,
     OpenedCalendar, Proposal, Recurrence, Response, ResponseOptions, Rights, ShowAs,
@@ -64,9 +72,9 @@ pub use junk::{Added, JunkList, JunkLists, MAX_JUNK_ENTRIES, junk_entry, junk_ke
 pub use load_limit::{MIN_ITEM_BYTES, from_json};
 pub use mailbox::{
     Account, AccountKind, AsWritten, BETWEEN_MAILBOXES, COPY_INTO_OUTBOX, Category, Directory, DownloadInFull, FOLDERS_STAY_YET, Folder,
-    FolderCounts, FolderKind, GREY_CATEGORY, GraphSwitch, IMPORTED, INTO_OUTBOX, MAX_FOLDER_DEPTH, MAX_RULES, MAX_SHARED, MOVED_INTO_OUTBOX,
-    MailIdentity, Mailbox, NOT_MOVING_YET, NOT_SENDING_YET, OAuth, OAuthProvider, PALETTE, Pending, Queued, Security, Server, ServerFavorites,
-    ServerFolder, preset_category_color,
+    FolderCounts, FolderKind, GREY_CATEGORY, GraphSwitch, IMPORTED, INTO_OUTBOX, MAX_FOLDER_DEPTH, MAX_FOLDERS, MAX_RULES, MAX_SHARED,
+    MOVED_INTO_OUTBOX, MailIdentity, Mailbox, NOT_MOVING_YET, NOT_SENDING_YET, OAuth, OAuthProvider, PALETTE, Pending, Queued, Security, Server,
+    ServerFavorites, ServerFolder, preset_category_color,
 };
 pub use mailcraft_time as time;
 pub use message::{
@@ -75,6 +83,7 @@ pub use message::{
     text_hash,
 };
 pub use messages::Messages;
+pub use note::{JournalEntry, Note};
 pub use offline::{KeepOffline, OfflineWindow};
 pub use remote::{AccountChoice, Origin};
 pub use rich::{RichBody, RichText};

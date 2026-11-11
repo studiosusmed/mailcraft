@@ -585,6 +585,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rounded(&[(7.5, 2.5), (12.5, 2.5), (12.0, 8.0), (14.5, 10.5), (5.5, 10.5), (8.0, 8.0)], true, 0.5, c);
             pen.line(&[(10.0, 10.5), (10.0, 17.5)]);
         }
+        // Bookmark: ribbon marker banner with notched bottom.
+        "bookmark" => {
+            pen.rounded(&[(5.5, 3.0), (14.5, 3.0), (14.5, 17.0), (10.0, 13.0), (5.5, 17.0)], true, 0.5, c);
+        }
         // A message, and an arrow that takes it somewhere.
         "rules" | "createRule" => {
             pen.envelope(2.5, 2.5, 12.5, 9.5, c);
@@ -818,6 +822,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "tasks" | "task" => {
             pen.rect(3.5, 3.5, 16.5, 16.5, c);
             pen.check(10.0, 10.5, 1.0, green);
+        }
+        "journal" => {
+            // A bound book with lines on its page.
+            pen.rect(4.5, 3.5, 15.5, 16.5, c);
+            pen.line(&[(7.5, 3.5), (7.5, 16.5)]);
+            pen.line(&[(9.5, 7.5), (13.5, 7.5)]);
+            pen.line(&[(9.5, 10.5), (13.5, 10.5)]);
         }
         "newTask" => {
             pen.cut_box(3.5, 3.5, 16.5, 16.5, c);
@@ -1308,6 +1319,7 @@ pub const NAMES: &[&str] = &[
     "category",
     "categories",
     "pin",
+    "bookmark",
     "rules",
     "createRule",
     "attach",
@@ -1368,6 +1380,7 @@ pub const NAMES: &[&str] = &[
     "meetingDeclined",
     "tasks",
     "task",
+    "journal",
     "newTask",
     "next",
     "forwardPeriod",

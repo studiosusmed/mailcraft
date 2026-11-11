@@ -149,6 +149,7 @@ pub(crate) enum Menu {
     FontColor,
     Highlight,
     Junk,
+    Bookmarks,
 }
 
 impl Menu {
@@ -444,6 +445,7 @@ fn home_mail(app: &MailApp) -> Tab {
                 Item::big_menu("categorize", "categorize", "Categorize", "Categorize", Menu::CategorizeMail).at(3, 3).plain(),
                 Item::big_menu("followUp", "flag", "Follow\nUp", "Follow Up", Menu::FollowUp).at(3, 3).plain(),
                 Item::small("pin", "Pin", "Pin to the top of the list", "mail.pin", no()).checked(pinned).at(5, 5),
+                Item::big_menu("bookmarks", "bookmark", "Book-\nmarks", "Bookmarks", Menu::Bookmarks).at(5, 5),
             ],
         ),
         g(
@@ -1083,7 +1085,9 @@ fn help() -> Tab {
                 Item::big("report", "Report a\nProblem", "ui.reportProblem", no()).at(0, 4),
             ],
         )],
-        note: "MailCraft is open source (MIT or Apache-2.0). Every button here runs a command that scripts and agents can run too: see Search Commands.",
+        note: tl!(
+            "MailCraft is open source (MIT or Apache-2.0). Every button here runs a command that scripts and agents can run too: see Search Commands."
+        ),
         note_width: 420.0,
     }
 }
@@ -1525,6 +1529,63 @@ fn menu_contents(ui: &mut Ui, app: &mut MailApp, menu: Menu) {
         Menu::FontColor => color_menu(ui, app),
         Menu::Highlight => highlight_menu(ui, app),
         Menu::FontSize => size_menu(ui, app),
+        Menu::Bookmarks => bookmarks_menu(ui, app),
+    }
+}
+
+/// The bookmarks menu for the focused message and its conversation.
+pub(crate) fn bookmarks_menu(ui: &mut Ui, app: &mut MailApp) {
+    let mid = app.session.sel.focus().unwrap_or(0);
+    let enabled = mid != 0;
+    let add_btn = ui.add_enabled(enabled, egui::Button::new(tl!("Add Bookmark")).min_size(vec2(190.0, 0.0)));
+    if add_btn.clicked() {
+        let _ = app.run("bookmark.add", json!({"id": mid}));
+        ui.close();
+    }
+    ui.separator();
+
+    let marks = if enabled {
+        let conversation_ids = app.session.mailbox.conversation(mid);
+        let ids = if conversation_ids.is_empty() { vec![mid] } else { conversation_ids };
+        app.session.mailbox.bookmarks_for_messages(&ids)
+    } else {
+        Vec::new()
+    };
+
+    if marks.is_empty() {
+        ui.add_enabled(false, egui::Button::new(tl!("No bookmarks")));
+    } else {
+        let mut remove_id = None;
+        let mut jump_id = None;
+        for bm in marks {
+            let label = if bm.name.is_empty() {
+                if bm.quote.is_empty() {
+                    let num = bm.id;
+                    crate::i18n::fmt(tl!("Bookmark #{n}"), &[("n", &num.to_string())])
+                } else {
+                    bm.quote.clone()
+                }
+            } else {
+                bm.name.clone()
+            };
+            let short: String = label.chars().take(25).collect();
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(short).min_size(vec2(150.0, 0.0))).clicked() {
+                    jump_id = Some(bm.id);
+                }
+                if widgets::icon_button(ui, "close", tl!("Remove"), 12.0, true).clicked() {
+                    remove_id = Some(bm.id);
+                }
+            });
+        }
+        if let Some(id) = jump_id {
+            let _ = app.run("bookmark.jump", json!({"id": id}));
+            ui.close();
+        }
+        if let Some(id) = remove_id {
+            let _ = app.run("bookmark.remove", json!({"id": id}));
+            ui.close();
+        }
     }
 }
 

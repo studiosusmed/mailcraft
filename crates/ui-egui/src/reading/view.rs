@@ -26,7 +26,7 @@ use mailcraft_model::Message;
 use super::Place;
 use super::colors::Paper;
 use super::images::{self, Picture, Pictures, Remote};
-use super::layout::{Glue, ItemKind, Laid, PIECE_CHARS, PlaceholderItem, TextItem, cut};
+use super::layout::{Glue, ItemKind, Laid, PIECE_CHARS, PlaceholderItem, TextItem, TextLink, cut};
 use super::remote::Access;
 use super::select::{self, Action};
 use crate::MailApp;
@@ -180,6 +180,7 @@ fn in_pieces(blocks: Vec<Block>) -> (Vec<Block>, Vec<Option<Glue>>) {
                 gap: if n == 0 { block.gap } else { 0 },
                 line_height: block.line_height,
                 inset: block.inset,
+                image_padding: block.image_padding,
                 line: block.line,
             });
             cuts.push((n > 0).then_some(glue));
@@ -541,6 +542,60 @@ pub fn show(app: &mut MailApp, ui: &mut Ui, message: &Arc<Message>, place: Place
     }
     drop(pictures);
     let mut state = app.text_selection.state(place);
+
+    // Scroll to and highlight bookmark if jumping to one in this message (#951).
+    if matches!(place, Place::Pane | Place::Window(_))
+        && let Some((bm_msg, bm_quote, bm_offset)) = &app.bookmark_target
+        && *bm_msg == message.id
+    {
+        let mut target_rect = None;
+        let mut target_range = None;
+        if !bm_quote.trim().is_empty() {
+            // Find by quote text first
+            let q = bm_quote.trim();
+            for (seg_idx, &item_idx) in entry.laid.segs.iter().enumerate() {
+                if let Some(super::layout::Item { rect, kind: super::layout::ItemKind::Text(text), .. }) = entry.laid.items.get(item_idx as usize) {
+                    if let Some(byte_idx) = text.job.text.find(q) {
+                        let char_start = text.job.text[..byte_idx].chars().count();
+                        let char_len = q.chars().count();
+                        target_rect = Some(*rect);
+                        target_range = Some((
+                            super::select::Point { seg: seg_idx, at: char_start },
+                            super::select::Point { seg: seg_idx, at: char_start.saturating_add(char_len) },
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        // Fall back to offset if quote was not found or was empty
+        if target_rect.is_none() {
+            let mut chars_seen = 0;
+            for (seg_idx, &item_idx) in entry.laid.segs.iter().enumerate() {
+                if let Some(super::layout::Item { rect, kind: super::layout::ItemKind::Text(text), .. }) = entry.laid.items.get(item_idx as usize) {
+                    let count = text.chars as usize;
+                    if *bm_offset >= chars_seen && *bm_offset < chars_seen.saturating_add(count) {
+                        let at = bm_offset.saturating_sub(chars_seen);
+                        target_rect = Some(*rect);
+                        target_range = Some((
+                            super::select::Point { seg: seg_idx, at },
+                            super::select::Point { seg: seg_idx, at: at.saturating_add(20).min(count) },
+                        ));
+                        break;
+                    }
+                    chars_seen = chars_seen.saturating_add(count);
+                }
+            }
+        }
+        if let Some(r) = target_rect {
+            ui.scroll_to_rect(r, Some(egui::Align::Center));
+        }
+        if let (Some((p1, p2)), Some(st)) = (target_range, state.as_deref_mut()) {
+            st.select_body_range(p1, p2);
+        }
+        app.bookmark_target = None;
+    }
+
     // A copy that waited for the layout to be whole is due now.
     let due = state.as_deref_mut().and_then(|state| state.bind(&entry.doc, entry.laid.done));
     let (origin, asked) = paint(ui, &entry.laid, &t, access, state, &flagged);
@@ -725,9 +780,9 @@ pub fn paint(
                     marks.text(&mut galley, part);
                 }
                 if !flagged.is_empty() {
-                    for (range, url) in &text.links {
-                        if super::warnings::is_mismatched(url, flagged) {
-                            for r in char_rects(&galley, range) {
+                    for link in &text.links {
+                        if super::warnings::is_mismatched(&link.url, flagged) {
+                            for r in char_rects(&galley, &link.range) {
                                 painter.rect_stroke(
                                     r.translate(at.to_vec2()).expand(1.5),
                                     2.0,
@@ -738,7 +793,8 @@ pub fn paint(
                         }
                     }
                 }
-                painter.galley(at, galley, t.text);
+                painter.galley(at, Arc::clone(&galley), t.text);
+                paint_link_underlines(&painter, at, &galley, &text.links);
             }
             ItemKind::Picture(picture) => {
                 let store = pictures.get_or_insert_with(|| Pictures::of(&ctx));
@@ -912,10 +968,41 @@ fn char_rects(galley: &egui::Galley, range: &std::ops::Range<usize>) -> Vec<Rect
     out
 }
 
+/// Draw each link just below its glyphs' baseline. egui's underline follows the bottom of
+/// the line box, which includes the extra spacing of a message's line height.
+pub(super) fn paint_link_underlines(painter: &egui::Painter, at: egui::Pos2, galley: &egui::Galley, links: &[TextLink]) {
+    let mut links = links.iter().peekable();
+    let mut row_start = 0;
+    for row in &galley.rows {
+        if links.peek().is_none() {
+            break;
+        }
+        let row_end = row_start + row.glyphs.len();
+        let origin = at + row.pos.to_vec2();
+        let visible = painter.clip_rect().intersects(row.rect().translate(at.to_vec2()));
+        while let Some(link) = links.peek().filter(|link| link.range.start < row_end) {
+            let from = link.range.start.saturating_sub(row_start);
+            let to = link.range.end.min(row_end).saturating_sub(row_start);
+            if visible
+                && let Some(glyphs) = row.glyphs.get(from..to)
+                && let (Some(first), Some(last)) = (glyphs.first(), glyphs.last())
+            {
+                let y = glyphs.iter().map(|g| g.pos.y + (g.font_face_height * 0.10).max(1.0)).fold(0.0, f32::max);
+                painter.line_segment([origin + vec2(first.pos.x, y), origin + vec2(last.max_x(), y)], Stroke::new(1.0, link.ink));
+            }
+            if link.range.end > row_end {
+                break;
+            }
+            links.next();
+        }
+        row_start = row_end + usize::from(row.ends_with_newline);
+    }
+}
+
 /// The link of a laid-out text that a point (from the text's origin) is on.
 pub fn link_under(text: &TextItem, galley: &egui::Galley, point: egui::Vec2) -> Option<Arc<str>> {
     let index = char_at(galley, point)?;
-    text.links.iter().find(|(range, _)| range.contains(&index)).map(|(_, url)| url.clone())
+    text.links.iter().find(|link| link.range.contains(&index)).map(|link| Arc::clone(&link.url))
 }
 
 /// A list bullet: a disc, a ring or a square by the depth of the list, as in a browser.

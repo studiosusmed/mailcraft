@@ -1091,6 +1091,10 @@ pub struct Mailbox {
     pub events: BTreeMap<Id, Arc<Event>>,
     #[serde(deserialize_with = "crate::load_limit::capped_map")]
     pub tasks: BTreeMap<Id, Arc<Task>>,
+    #[serde(deserialize_with = "crate::load_limit::capped_map")]
+    pub notes: BTreeMap<Id, Arc<crate::Note>>,
+    #[serde(deserialize_with = "crate::load_limit::capped_map")]
+    pub journal: BTreeMap<Id, Arc<crate::JournalEntry>>,
     #[serde(deserialize_with = "crate::load_limit::capped_vec")]
     pub categories: Vec<Category>,
     pub rules: Vec<Rule>,
@@ -1103,6 +1107,9 @@ pub struct Mailbox {
     /// of the account (a shared mailbox has its owner's, [`Mailbox::junk_owner`]).
     #[serde(skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "crate::load_limit::capped_map")]
     pub junk_accounts: BTreeMap<Id, crate::JunkLists>,
+    /// Bookmarks marking places in long messages or conversations (#951), kept on this computer.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "crate::load_limit::capped_map")]
+    pub bookmarks: BTreeMap<Id, crate::Bookmark>,
     pub signatures: Vec<Signature>,
     /// Moves and deletions the mail server is yet to be told, oldest first.
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::sync::lenient_list")]
@@ -1202,10 +1209,13 @@ impl Default for Mailbox {
             calendars: Vec::new(),
             events: BTreeMap::new(),
             tasks: BTreeMap::new(),
+            notes: BTreeMap::new(),
+            journal: BTreeMap::new(),
             categories: default_categories(),
             rules: Vec::new(),
             junk: crate::JunkLists::default(),
             junk_accounts: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
             signatures: Vec::new(),
             pending: Vec::new(),
             event_changes: Vec::new(),
@@ -1796,9 +1806,13 @@ impl Mailbox {
     }
 
     fn name_taken(&self, account: Id, parent: Option<Id>, name: &str, except: Option<Id>) -> bool {
-        self.folders
-            .iter()
-            .any(|f| f.account == account && f.parent == parent && Some(f.id) != except && f.name.to_lowercase() == name.to_lowercase())
+        // Lowered once, and not at all for two names in ASCII: a server's thousands of folders
+        // are each checked against all the others beside them (#991).
+        let lowered = name.to_lowercase();
+        let same = |other: &str| {
+            if other.is_ascii() && name.is_ascii() { other.eq_ignore_ascii_case(name) } else { other.to_lowercase() == lowered }
+        };
+        self.folders.iter().any(|f| f.account == account && f.parent == parent && Some(f.id) != except && same(&f.name))
     }
 
     /// Create a folder under `parent` (or at the account's top level).
@@ -2779,6 +2793,9 @@ impl Mailbox {
         for t in self.tasks.values_mut().filter(|t| t.message == Some(id)) {
             Arc::make_mut(t).message = None;
         }
+        if !self.bookmarks.is_empty() {
+            self.bookmarks.retain(|_, b| b.message != id);
+        }
         if !self.pending.is_empty() {
             self.pending.retain(|p| !matches!(p, Pending::Move { message, .. } if *message == id));
         }
@@ -2809,6 +2826,47 @@ impl Mailbox {
         let Some(m) = self.message(id) else { return Vec::new() };
         let threads = ThreadIndex::build(self.messages.values().map(|x| x.as_ref()).filter(|x| x.account == m.account));
         self.conversation_in(&threads, id)
+    }
+
+    // ---- bookmarks ----
+
+    /// All bookmarks in the mailbox.
+    pub fn bookmarks(&self) -> &BTreeMap<Id, crate::Bookmark> {
+        &self.bookmarks
+    }
+
+    /// Look up a bookmark by its unique id.
+    pub fn bookmark(&self, id: Id) -> Option<&crate::Bookmark> {
+        self.bookmarks.get(&id)
+    }
+
+    /// Bookmarks that belong to message `id`, sorted by offset.
+    pub fn bookmarks_for_message(&self, message_id: Id) -> Vec<crate::Bookmark> {
+        let mut list: Vec<crate::Bookmark> = self.bookmarks.values().filter(|b| b.message == message_id).cloned().collect();
+        list.sort_by_key(|b| b.offset);
+        list
+    }
+
+    /// Bookmarks that belong to any message in `ids` (e.g. a conversation), sorted by message and offset.
+    pub fn bookmarks_for_messages(&self, message_ids: &[Id]) -> Vec<crate::Bookmark> {
+        let set: HashSet<Id> = message_ids.iter().copied().collect();
+        let mut list: Vec<crate::Bookmark> = self.bookmarks.values().filter(|b| set.contains(&b.message)).cloned().collect();
+        list.sort_by_key(|b| (b.message, b.offset));
+        list
+    }
+
+    /// Add a bookmark. Returns `true` if added, `false` if limit [`crate::MAX_BOOKMARKS`] was reached.
+    pub fn add_bookmark(&mut self, bookmark: crate::Bookmark) -> bool {
+        if self.bookmarks.len() >= crate::MAX_BOOKMARKS && !self.bookmarks.contains_key(&bookmark.id) {
+            return false;
+        }
+        self.bookmarks.insert(bookmark.id, bookmark);
+        true
+    }
+
+    /// Remove a bookmark by its unique id. Returns `true` if removed.
+    pub fn remove_bookmark(&mut self, id: Id) -> bool {
+        self.bookmarks.remove(&id).is_some()
     }
 
     /// [`Mailbox::conversation`] of `id` by `threads`, built of (at least) the messages of its
@@ -3101,6 +3159,20 @@ impl Mailbox {
 
     pub fn remove_event(&mut self, id: Id) -> Result<(), ModelError> {
         self.events.remove(&id).map(|_| ()).ok_or(not_found("event", id))
+    }
+
+    pub fn add_note(&mut self, mut n: crate::Note) -> Id {
+        n.id = self.alloc_id();
+        let id = n.id;
+        self.notes.insert(id, Arc::new(n));
+        id
+    }
+
+    pub fn add_journal(&mut self, mut j: crate::JournalEntry) -> Id {
+        j.id = self.alloc_id();
+        let id = j.id;
+        self.journal.insert(id, Arc::new(j));
+        id
     }
 
     pub fn add_task(&mut self, mut t: Task) -> Id {
@@ -3399,6 +3471,8 @@ impl Mailbox {
             .chain(self.contacts.keys())
             .chain(self.events.keys())
             .chain(self.tasks.keys())
+            .chain(self.notes.keys())
+            .chain(self.journal.keys())
             .copied()
             .chain(self.accounts.iter().map(|a| a.id))
             .chain(self.folders.iter().map(|f| f.id))
@@ -3719,6 +3793,20 @@ impl Mailbox {
         let after: usize = self.favorites_from_server.iter().map(|list| list.folders.len().saturating_add(1)).sum();
         if after != before {
             fixed.push("the Favorites kept from a mail server corrected".into());
+        }
+        // Bookmarks: drop bookmarks pointing to non-existent messages and cap at MAX_BOOKMARKS.
+        let msg_ids: HashSet<Id> = self.messages.keys().copied().collect();
+        let initial_bookmarks = self.bookmarks.len();
+        self.bookmarks.retain(|id, b| sane(id) && msg_ids.contains(&b.message));
+        while self.bookmarks.len() > crate::MAX_BOOKMARKS {
+            if let Some(first_key) = self.bookmarks.keys().next().copied() {
+                self.bookmarks.remove(&first_key);
+            } else {
+                break;
+            }
+        }
+        if self.bookmarks.len() != initial_bookmarks {
+            fixed.push("bookmarks tidied".into());
         }
         self.next_id = self.next_id.max(1);
         fixed
