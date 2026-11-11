@@ -542,6 +542,60 @@ pub fn show(app: &mut MailApp, ui: &mut Ui, message: &Arc<Message>, place: Place
     }
     drop(pictures);
     let mut state = app.text_selection.state(place);
+
+    // Scroll to and highlight bookmark if jumping to one in this message (#951).
+    if matches!(place, Place::Pane | Place::Window(_))
+        && let Some((bm_msg, bm_quote, bm_offset)) = &app.bookmark_target
+        && *bm_msg == message.id
+    {
+        let mut target_rect = None;
+        let mut target_range = None;
+        if !bm_quote.trim().is_empty() {
+            // Find by quote text first
+            let q = bm_quote.trim();
+            for (seg_idx, &item_idx) in entry.laid.segs.iter().enumerate() {
+                if let Some(super::layout::Item { rect, kind: super::layout::ItemKind::Text(text), .. }) = entry.laid.items.get(item_idx as usize) {
+                    if let Some(byte_idx) = text.job.text.find(q) {
+                        let char_start = text.job.text[..byte_idx].chars().count();
+                        let char_len = q.chars().count();
+                        target_rect = Some(*rect);
+                        target_range = Some((
+                            super::select::Point { seg: seg_idx, at: char_start },
+                            super::select::Point { seg: seg_idx, at: char_start.saturating_add(char_len) },
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        // Fall back to offset if quote was not found or was empty
+        if target_rect.is_none() {
+            let mut chars_seen = 0;
+            for (seg_idx, &item_idx) in entry.laid.segs.iter().enumerate() {
+                if let Some(super::layout::Item { rect, kind: super::layout::ItemKind::Text(text), .. }) = entry.laid.items.get(item_idx as usize) {
+                    let count = text.chars as usize;
+                    if *bm_offset >= chars_seen && *bm_offset < chars_seen.saturating_add(count) {
+                        let at = bm_offset.saturating_sub(chars_seen);
+                        target_rect = Some(*rect);
+                        target_range = Some((
+                            super::select::Point { seg: seg_idx, at },
+                            super::select::Point { seg: seg_idx, at: at.saturating_add(20).min(count) },
+                        ));
+                        break;
+                    }
+                    chars_seen = chars_seen.saturating_add(count);
+                }
+            }
+        }
+        if let Some(r) = target_rect {
+            ui.scroll_to_rect(r, Some(egui::Align::Center));
+        }
+        if let (Some((p1, p2)), Some(st)) = (target_range, state.as_deref_mut()) {
+            st.select_body_range(p1, p2);
+        }
+        app.bookmark_target = None;
+    }
+
     // A copy that waited for the layout to be whole is due now.
     let due = state.as_deref_mut().and_then(|state| state.bind(&entry.doc, entry.laid.done));
     let (origin, asked) = paint(ui, &entry.laid, &t, access, state, &flagged);
