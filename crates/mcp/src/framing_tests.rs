@@ -226,6 +226,9 @@ fn params(f: &Fixture, id: &str) -> Value {
         "notes.get" => json!({"id": f.note}),
         "journal.get" => json!({"id": f.entry}),
         "tasks.list" => json!({"account": "all", "filter": "all"}),
+        "bookmark.add" => json!({"id": m, "quote": marked("quote")}),
+        "bookmark.list" => json!({"id": m}),
+        "bookmark.jump" => json!({"id": 1}),
         "edit.copy" | "edit.cut" => json!({"from": 0, "to": marked("composed").chars().count()}),
         _ => json!({}),
     }
@@ -248,6 +251,9 @@ fn no_marker_in_any_content_answer_stands_outside_a_frame() {
         }
         if *id == "mail.findRelated" {
             exec(&mut h, &pol, "mail.select", json!({"id": f.message})).unwrap();
+        }
+        if *id == "bookmark.jump" {
+            exec(&mut h, &pol, "bookmark.add", json!({"id": f.message, "quote": marked("quote")})).unwrap();
         }
         let p = params(&f, id);
         let answer = exec(&mut h, &pol, id, p.clone()).unwrap_or_else(|e| panic!("{id} {p}: {e}"));
