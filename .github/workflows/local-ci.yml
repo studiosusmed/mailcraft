@@ -1,0 +1,43 @@
+# Fork-only: runs `cargo xtask ci` on the owner's own machine (self-hosted runner), because GitHub-hosted
+# minutes are used up. Manual start only, never from pull requests. Not part of any upstream pull request.
+name: Local CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or commit of this fork to check
+        required: true
+        default: bookmarks-951
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ci
+  cancel-in-progress: false
+
+jobs:
+  xtask-ci:
+    runs-on: [self-hosted, mailcraft-ci]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: cargo xtask ci
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/mailcraft-target
+        run: |
+          rustc --version
+          cargo xtask ci 2>&1 | tee ci-output.txt
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            tail -40 ci-output.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
